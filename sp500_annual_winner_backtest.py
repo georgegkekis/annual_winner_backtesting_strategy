@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from datetime import date
 from io import StringIO
+import json
 import math
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -25,6 +26,7 @@ INDEXES = {
     },
 }
 DOWNLOAD_CHUNK_SIZE = 40
+CACHE_DIR = Path(__file__).parent / "price_cache"
 
 
 def get_constituents(index_name: str) -> list[str]:
@@ -50,6 +52,30 @@ def get_constituents(index_name: str) -> list[str]:
         f"Could not find column {config['constituent_column']!r} on "
         f"{config['constituents_url']}"
     )
+
+
+def get_cached_constituents(
+    index_name: str, cache_dir: Path, cache_month: str
+) -> list[str]:
+    cache_path = cache_dir / f"constituents_{index_name}.json"
+    if cache_path.exists():
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+        if cached.get("cache_month") == cache_month:
+            symbols = cached.get("symbols")
+            if isinstance(symbols, list) and all(
+                isinstance(symbol, str) for symbol in symbols
+            ):
+                return symbols
+
+    symbols = get_constituents(index_name)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    temporary_path = cache_path.with_suffix(".json.tmp")
+    temporary_path.write_text(
+        json.dumps({"cache_month": cache_month, "symbols": symbols}, indent=2),
+        encoding="utf-8",
+    )
+    temporary_path.replace(cache_path)
+    return symbols
 
 
 def download_adjusted_closes(
@@ -103,6 +129,45 @@ def download_adjusted_closes(
     prices = prices.loc[:, ~prices.columns.duplicated()]
     if prices.empty:
         raise RuntimeError("No usable adjusted closing prices were downloaded.")
+    return prices
+
+
+def get_cached_adjusted_closes(
+    index_name: str,
+    symbols: list[str],
+    start: date,
+    end: date,
+    cache_dir: Path,
+    cache_month: str,
+) -> pd.DataFrame:
+    cache_path = cache_dir / f"adjusted_closes_{index_name}.csv"
+    metadata_path = cache_dir / f"adjusted_closes_{index_name}.json"
+    expected_metadata = {
+        "cache_month": cache_month,
+        "index": index_name,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "symbols": sorted(symbols),
+    }
+
+    if cache_path.exists() and metadata_path.exists():
+        cached_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if cached_metadata == expected_metadata:
+            prices = pd.read_csv(cache_path, index_col=0, parse_dates=True)
+            if prices.empty:
+                raise RuntimeError(f"The price cache is empty: {cache_path}")
+            return prices
+
+    prices = download_adjusted_closes(symbols, start, end)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    temporary_cache_path = cache_path.with_suffix(".csv.tmp")
+    temporary_metadata_path = metadata_path.with_suffix(".json.tmp")
+    prices.to_csv(temporary_cache_path)
+    temporary_cache_path.replace(cache_path)
+    temporary_metadata_path.write_text(
+        json.dumps(expected_metadata, indent=2), encoding="utf-8"
+    )
+    temporary_metadata_path.replace(metadata_path)
     return prices
 
 
@@ -208,8 +273,16 @@ def main() -> None:
     download_start = date(first_investment_year - 2, 1, 1)
     download_end = date(completed_year + 1, 1, 1)
 
-    constituents = get_constituents(args.index)
-    prices = download_adjusted_closes(constituents, download_start, download_end)
+    cache_month = date.today().strftime("%Y-%m")
+    constituents = get_cached_constituents(args.index, CACHE_DIR, cache_month)
+    prices = get_cached_adjusted_closes(
+        args.index,
+        constituents,
+        download_start,
+        download_end,
+        CACHE_DIR,
+        cache_month,
+    )
     purchases = run_backtest(prices, args.years, args.amount)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     purchases.to_csv(args.output, index=False)

@@ -49,3 +49,9 @@ python sp500_annual_winner_backtest.py --index nasdaq100
 
 Annual pick, contribution, share, and ending-value details are written to
 `results/annual_purchases.csv`. Use `--output PATH` to choose another file.
+
+Downloaded index constituents and adjusted closing prices are cached in
+`price_cache/`. The cache is reused throughout the current calendar month and
+refreshed when the month changes. It is also refreshed if the requested index,
+date range, or constituent list no longer matches the cached price data. The
+cache files are local and excluded from Git.
