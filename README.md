@@ -25,6 +25,13 @@ close in the following year, and values all shares at the last available close
 of the final completed investment year. It assumes fractional shares and
 excludes fees and taxes.
 
+The script also invests the same yearly amount in SPY, an S&P 500 ETF, on the
+first available trading day of each year. It prints two lines, one per
+strategy, showing total invested, ending value, profit/loss, and profit/loss
+percentage, along with the annualized money-weighted return. The annualized
+return uses the actual purchase dates and final valuation date, so it accounts
+for each yearly contribution being invested for a different length of time.
+
 ## Run
 
 Python 3.10 or later is recommended.
@@ -47,11 +54,9 @@ against the current Nasdaq-100 members:
 python sp500_annual_winner_backtest.py --index nasdaq100
 ```
 
-Annual pick, contribution, share, and ending-value details are written to
-`results/annual_purchases.csv`. Use `--output PATH` to choose another file.
-
 Downloaded index constituents and adjusted closing prices are cached in
 `price_cache/`. The cache is reused throughout the current calendar month and
 refreshed when the month changes. It is also refreshed if the requested index,
 date range, or constituent list no longer matches the cached price data. The
-cache files are local and excluded from Git.
+cache files are local and excluded from Git. No backtest result files are
+written.

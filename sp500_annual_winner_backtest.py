@@ -27,6 +27,7 @@ INDEXES = {
 }
 DOWNLOAD_CHUNK_SIZE = 40
 CACHE_DIR = Path(__file__).parent / "price_cache"
+SP500_BENCHMARK_TICKER = "SPY"
 
 
 def get_constituents(index_name: str) -> list[str]:
@@ -172,7 +173,10 @@ def get_cached_adjusted_closes(
 
 
 def run_backtest(
-    prices: pd.DataFrame, years: int, annual_investment: float
+    prices: pd.DataFrame,
+    years: int,
+    annual_investment: float,
+    constituent_symbols: list[str],
 ) -> pd.DataFrame:
     completed_year = date.today().year - 1
     first_investment_year = completed_year - years + 1
@@ -190,7 +194,10 @@ def run_backtest(
                 f"Price history does not cover {winner_year - 1} and {winner_year}, "
                 "which are needed to select that year's winner."
             )
-        returns = prior_year_prices.iloc[1] / prior_year_prices.iloc[0] - 1
+        constituent_prices = prior_year_prices.loc[
+            :, prior_year_prices.columns.isin(constituent_symbols)
+        ]
+        returns = constituent_prices.iloc[1] / constituent_prices.iloc[0] - 1
         returns = returns.replace([float("inf"), -float("inf")], pd.NA).dropna()
         if returns.empty:
             raise RuntimeError(
@@ -215,6 +222,9 @@ def run_backtest(
                 "winner_of_year": winner_year,
                 "selected_company": winner,
                 "winner_year_return_pct": float(returns.loc[winner]) * 100,
+                "purchase_date": prices.index[
+                    prices.index.year == investment_year
+                ][0],
                 "investment": annual_investment,
                 "purchase_price": float(purchase_price),
                 "shares": shares,
@@ -224,6 +234,104 @@ def run_backtest(
         )
 
     return pd.DataFrame(purchases)
+
+
+def run_sp500_benchmark(
+    prices: pd.DataFrame, years: int, annual_investment: float
+) -> pd.DataFrame:
+    if SP500_BENCHMARK_TICKER not in prices.columns:
+        raise RuntimeError(
+            f"Price history does not contain the S&P 500 benchmark "
+            f"{SP500_BENCHMARK_TICKER}."
+        )
+
+    completed_year = date.today().year - 1
+    first_investment_year = completed_year - years + 1
+    benchmark_prices = prices[SP500_BENCHMARK_TICKER].dropna()
+    ending_prices = benchmark_prices[benchmark_prices.index.year == completed_year]
+    if ending_prices.empty:
+        raise RuntimeError(
+            f"No {SP500_BENCHMARK_TICKER} price data available in {completed_year}."
+        )
+    ending_price = float(ending_prices.iloc[-1])
+    purchases = []
+
+    for investment_year in range(first_investment_year, completed_year + 1):
+        year_prices = benchmark_prices[
+            benchmark_prices.index.year == investment_year
+        ]
+        if year_prices.empty:
+            raise RuntimeError(
+                f"No {SP500_BENCHMARK_TICKER} price data available in "
+                f"{investment_year}."
+            )
+        purchase_price = float(year_prices.iloc[0])
+        shares = annual_investment / purchase_price
+        purchases.append(
+            {
+                "investment_year": investment_year,
+                "purchase_date": year_prices.index[0],
+                "investment": annual_investment,
+                "purchase_price": purchase_price,
+                "shares": shares,
+                "ending_price": ending_price,
+                "ending_value": shares * ending_price,
+            }
+        )
+
+    return pd.DataFrame(purchases)
+
+
+def annualized_return(purchases: pd.DataFrame, valuation_date: pd.Timestamp) -> float:
+    if purchases.empty or purchases["investment"].sum() <= 0:
+        raise ValueError("Annualized return requires positive investments.")
+    if (purchases["purchase_date"] >= valuation_date).any():
+        raise ValueError("Valuation date must be after every purchase date.")
+
+    years = (
+        (valuation_date - pd.to_datetime(purchases["purchase_date"])).dt.days
+        / 365
+    )
+    contributions = purchases["investment"].astype(float).tolist()
+    durations = years.tolist()
+    ending_value = float(purchases["ending_value"].sum())
+
+    def discounted_value(rate: float) -> float:
+        return sum(
+            amount * (1 + rate) ** duration
+            for amount, duration in zip(contributions, durations)
+        )
+
+    lower = -0.999999999
+    upper = 1.0
+    while discounted_value(upper) < ending_value:
+        upper = upper * 2 + 1
+
+    for _ in range(100):
+        midpoint = (lower + upper) / 2
+        if discounted_value(midpoint) < ending_value:
+            lower = midpoint
+        else:
+            upper = midpoint
+    return (lower + upper) / 2 * 100
+
+
+def format_portfolio_summary(
+    name: str,
+    total_invested: float,
+    ending_value: float,
+    annual_return_pct: float,
+) -> str:
+    profit_loss = ending_value - total_invested
+    profit_loss_pct = profit_loss / total_invested * 100
+    return (
+        f"{name:<22} | "
+        f"${total_invested:>14,.2f} | "
+        f"${ending_value:>14,.2f} | "
+        f"${profit_loss:>+14,.2f} | "
+        f"{profit_loss_pct:>+8.2f}% | "
+        f"{annual_return_pct:>+8.2f}%"
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -252,12 +360,6 @@ def parse_args() -> argparse.Namespace:
         default=30,
         help="Number of completed investment years (default: 30).",
     )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path(__file__).parent / "results" / "annual_purchases.csv",
-        help="CSV file for annual purchase details.",
-    )
     args = parser.parse_args()
     if not math.isfinite(args.amount) or args.amount <= 0:
         parser.error("--amount must be a finite number greater than zero.")
@@ -277,25 +379,42 @@ def main() -> None:
     constituents = get_cached_constituents(args.index, CACHE_DIR, cache_month)
     prices = get_cached_adjusted_closes(
         args.index,
-        constituents,
+        [*constituents, SP500_BENCHMARK_TICKER],
         download_start,
         download_end,
         CACHE_DIR,
         cache_month,
     )
-    purchases = run_backtest(prices, args.years, args.amount)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    purchases.to_csv(args.output, index=False)
+    winner_purchases = run_backtest(
+        prices, args.years, args.amount, constituent_symbols=constituents
+    )
+    winner_value = float(winner_purchases["ending_value"].sum())
+    benchmark_purchases = run_sp500_benchmark(prices, args.years, args.amount)
+    sp500_value = float(benchmark_purchases["ending_value"].sum())
+    valuation_date = prices.index[prices.index.year == completed_year][-1]
+    total_invested = args.years * args.amount
 
-    invested = float(purchases["investment"].sum())
-    ending_value = float(purchases["ending_value"].sum())
-    print(f"Index universe: {args.index} (today's constituents)")
-    print(f"Investment years: {first_investment_year}-{completed_year}")
-    print(f"Annual contribution: ${args.amount:,.2f}")
-    print(f"Total invested: ${invested:,.2f}")
-    print(f"Ending portfolio value: ${ending_value:,.2f}")
-    print(f"Profit/loss: ${ending_value - invested:,.2f}")
-    print(f"Annual purchases written to: {args.output}")
+    print(
+        f"{'Strategy':<22} | {'Invested':>15} | {'Ending':>15} | "
+        f"{'Profit/Loss':>15} | {'Profit/Loss %':>13} | "
+        f"{'Annual Return':>13}"
+    )
+    print(
+        format_portfolio_summary(
+            "S&P 500",
+            total_invested,
+            sp500_value,
+            annualized_return(benchmark_purchases, valuation_date),
+        )
+    )
+    print(
+        format_portfolio_summary(
+            "Previous-year winners",
+            total_invested,
+            winner_value,
+            annualized_return(winner_purchases, valuation_date),
+        )
+    )
 
 
 if __name__ == "__main__":
