@@ -32,7 +32,10 @@ percentage, along with the annualized money-weighted return. The annualized
 return uses the actual purchase dates and final valuation date, so it accounts
 for each yearly contribution being invested for a different length of time. It
 also prints a per-purchase list with the selected company, purchase year,
-ending value, profit/loss, profit/loss percentage, and that purchase's CAGR.
+ending value, profit/loss percentage, and that purchase's CAGR. The list also
+shows each purchase's total return after five and ten years; it uses the first
+available adjusted close on or after each anniversary and shows `N/A` if the
+full period is not yet available.
 
 ## Run
 

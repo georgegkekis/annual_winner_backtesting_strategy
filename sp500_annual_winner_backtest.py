@@ -215,6 +215,8 @@ def run_backtest(
                 f"({investment_year}-{completed_year})."
             )
 
+        purchase_date = prices.index[prices.index.year == investment_year][0]
+        winner_prices = prices[winner].dropna()
         shares = annual_investment / float(purchase_price)
         purchases.append(
             {
@@ -222,18 +224,40 @@ def run_backtest(
                 "winner_of_year": winner_year,
                 "selected_company": winner,
                 "winner_year_return_pct": float(returns.loc[winner]) * 100,
-                "purchase_date": prices.index[
-                    prices.index.year == investment_year
-                ][0],
+                "purchase_date": purchase_date,
                 "investment": annual_investment,
                 "purchase_price": float(purchase_price),
                 "shares": shares,
                 "ending_price": float(ending_price),
                 "ending_value": shares * float(ending_price),
+                "return_5y_pct": forward_return_pct(
+                    winner_prices, purchase_date, 5, prices.index[-1]
+                ),
+                "return_10y_pct": forward_return_pct(
+                    winner_prices, purchase_date, 10, prices.index[-1]
+                ),
             }
         )
 
     return pd.DataFrame(purchases)
+
+
+def forward_return_pct(
+    prices: pd.Series,
+    purchase_date: pd.Timestamp,
+    years: int,
+    valuation_date: pd.Timestamp,
+) -> float | None:
+    target_date = pd.Timestamp(purchase_date) + pd.DateOffset(years=years)
+    if target_date > valuation_date:
+        return None
+    target_prices = prices.loc[target_date:valuation_date].dropna()
+    if target_prices.empty:
+        return None
+    purchase_price = prices.asof(purchase_date)
+    if pd.isna(purchase_price):
+        return None
+    return (float(target_prices.iloc[0]) / float(purchase_price) - 1) * 100
 
 
 def run_sp500_benchmark(
@@ -339,14 +363,13 @@ def format_purchase_details(
 ) -> list[str]:
     lines = [
         f"{'Company':<12} | {'Bought':>6} | {'Years Held':>10} | "
-        f"{'Ending Value':>14} | "
-        f"{'Profit/Loss':>14} | {'Profit/Loss %':>13} | {'CAGR':>9}"
+        f"{'Ending Value':>14} | {'Profit/Loss %':>13} | "
+        f"{'CAGR':>9} | {'Next 5Y %':>10} | {'Next 10Y %':>11}"
     ]
     for purchase in purchases.itertuples(index=False):
         investment = float(purchase.investment)
         ending_value = float(purchase.ending_value)
-        profit_loss = ending_value - investment
-        profit_loss_pct = profit_loss / investment * 100
+        profit_loss_pct = (ending_value - investment) / investment * 100
         holding_days = (valuation_date - pd.Timestamp(purchase.purchase_date)).days
         if holding_days <= 0:
             raise ValueError("Valuation date must be after each purchase date.")
@@ -356,14 +379,25 @@ def format_purchase_details(
             if ending_value == 0
             else ((ending_value / investment) ** (1 / holding_years) - 1) * 100
         )
+        return_5y = (
+            "N/A"
+            if pd.isna(purchase.return_5y_pct)
+            else f"{purchase.return_5y_pct:+.2f}%"
+        )
+        return_10y = (
+            "N/A"
+            if pd.isna(purchase.return_10y_pct)
+            else f"{purchase.return_10y_pct:+.2f}%"
+        )
         lines.append(
             f"{purchase.selected_company:<12} | "
             f"{purchase.investment_year:>6} | "
             f"{int(holding_years):>10} | "
             f"${ending_value:>13,.2f} | "
-            f"${profit_loss:>+13,.2f} | "
             f"{profit_loss_pct:>+12.2f}% | "
-            f"{cagr_pct:>+8.2f}%"
+            f"{cagr_pct:>+8.2f}% | "
+            f"{return_5y:>10} | "
+            f"{return_10y:>11}"
         )
     return lines
 
