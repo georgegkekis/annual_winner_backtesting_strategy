@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Backtest annual investments in the previous year's best-performing index member."""
+"""Backtest annual investments in the previous year's top index performers."""
 
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ INDEXES = {
 DOWNLOAD_CHUNK_SIZE = 40
 CACHE_DIR = Path(__file__).parent / "price_cache"
 SP500_BENCHMARK_TICKER = "SPY"
+DEFAULT_TOP_PERFORMER_COUNT = 1
 
 
 def get_constituents(index_name: str) -> list[str]:
@@ -177,11 +178,13 @@ def run_backtest(
     years: int,
     annual_investment: float,
     constituent_symbols: list[str],
+    top_performer_count: int = DEFAULT_TOP_PERFORMER_COUNT,
 ) -> pd.DataFrame:
+    if top_performer_count <= 0:
+        raise ValueError("top_performer_count must be greater than zero.")
     completed_year = date.today().year - 1
     first_investment_year = completed_year - years + 1
     year_end_prices = prices.groupby(prices.index.year).last()
-    year_first_prices = prices.groupby(prices.index.year).first()
     if completed_year not in year_end_prices.index:
         raise RuntimeError(f"No price data available in {completed_year}.")
     purchases = []
@@ -204,40 +207,53 @@ def run_backtest(
                 f"No index constituents have complete price data for {winner_year}."
             )
 
-        winner = str(returns.idxmax())
-        if investment_year not in year_first_prices.index:
-            raise RuntimeError(f"No price data available in {investment_year}.")
-        purchase_price = year_first_prices.loc[investment_year].get(winner)
-        ending_price = year_end_prices.loc[completed_year].get(winner)
-        if pd.isna(purchase_price) or pd.isna(ending_price):
+        top_performers = returns.nlargest(top_performer_count)
+        if len(top_performers) < top_performer_count:
             raise RuntimeError(
-                f"Missing purchase or ending price for {winner} "
-                f"({investment_year}-{completed_year})."
+                f"Only {len(top_performers)} constituents have complete price data "
+                f"for selecting the top {top_performer_count} in {winner_year}."
             )
 
-        purchase_date = prices.index[prices.index.year == investment_year][0]
-        winner_prices = prices[winner].dropna()
-        shares = annual_investment / float(purchase_price)
-        purchases.append(
-            {
-                "investment_year": investment_year,
-                "winner_of_year": winner_year,
-                "selected_company": winner,
-                "winner_year_return_pct": float(returns.loc[winner]) * 100,
-                "purchase_date": purchase_date,
-                "investment": annual_investment,
-                "purchase_price": float(purchase_price),
-                "shares": shares,
-                "ending_price": float(ending_price),
-                "ending_value": shares * float(ending_price),
-                "return_5y_pct": forward_return_pct(
-                    winner_prices, purchase_date, 5, prices.index[-1]
-                ),
-                "return_10y_pct": forward_return_pct(
-                    winner_prices, purchase_date, 10, prices.index[-1]
-                ),
-            }
-        )
+        investment_per_company = annual_investment / top_performer_count
+        for ticker, winner_return in top_performers.items():
+            winner_prices = prices[ticker].dropna()
+            investment_year_prices = winner_prices[
+                winner_prices.index.year == investment_year
+            ]
+            if investment_year_prices.empty:
+                raise RuntimeError(
+                    f"No purchase price available for {ticker} in {investment_year}."
+                )
+            purchase_date = investment_year_prices.index[0]
+            purchase_price = investment_year_prices.iloc[0]
+            ending_price = year_end_prices.loc[completed_year].get(ticker)
+            if pd.isna(purchase_price) or pd.isna(ending_price):
+                raise RuntimeError(
+                    f"Missing purchase or ending price for {ticker} "
+                    f"({investment_year}-{completed_year})."
+                )
+
+            shares = investment_per_company / float(purchase_price)
+            purchases.append(
+                {
+                    "investment_year": investment_year,
+                    "winner_of_year": winner_year,
+                    "selected_company": str(ticker),
+                    "winner_year_return_pct": float(winner_return) * 100,
+                    "purchase_date": purchase_date,
+                    "investment": investment_per_company,
+                    "purchase_price": float(purchase_price),
+                    "shares": shares,
+                    "ending_price": float(ending_price),
+                    "ending_value": shares * float(ending_price),
+                    "return_5y_pct": forward_return_pct(
+                        winner_prices, purchase_date, 5, prices.index[-1]
+                    ),
+                    "return_10y_pct": forward_return_pct(
+                        winner_prices, purchase_date, 10, prices.index[-1]
+                    ),
+                }
+            )
 
     return pd.DataFrame(purchases)
 
@@ -405,9 +421,9 @@ def format_purchase_details(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Invest a fixed amount at the start of each year in the index member "
-            "with the highest return over the previous calendar year, then hold "
-            "each purchase through the end of the backtest."
+            "Split each annual investment equally across the top index members "
+            "by prior-calendar-year return, then hold every purchase through "
+            "the end of the backtest."
         )
     )
     parser.add_argument(
@@ -428,11 +444,22 @@ def parse_args() -> argparse.Namespace:
         default=30,
         help="Number of completed investment years (default: 30).",
     )
+    parser.add_argument(
+        "--top-performers",
+        type=int,
+        default=DEFAULT_TOP_PERFORMER_COUNT,
+        help=(
+            "Number of previous-year top performers to buy each year "
+            f"(default: {DEFAULT_TOP_PERFORMER_COUNT})."
+        ),
+    )
     args = parser.parse_args()
     if not math.isfinite(args.amount) or args.amount <= 0:
         parser.error("--amount must be a finite number greater than zero.")
     if args.years <= 0:
         parser.error("--years must be greater than zero.")
+    if args.top_performers <= 0:
+        parser.error("--top-performers must be greater than zero.")
     return args
 
 
@@ -454,7 +481,11 @@ def main() -> None:
         cache_month,
     )
     winner_purchases = run_backtest(
-        prices, args.years, args.amount, constituent_symbols=constituents
+        prices,
+        args.years,
+        args.amount,
+        constituent_symbols=constituents,
+        top_performer_count=args.top_performers,
     )
     winner_value = float(winner_purchases["ending_value"].sum())
     benchmark_purchases = run_sp500_benchmark(prices, args.years, args.amount)
@@ -483,7 +514,7 @@ def main() -> None:
             annualized_return(winner_purchases, valuation_date),
         )
     )
-    print("\nAnnual winner purchases:")
+    print(f"\nAnnual top-{args.top_performers} purchases:")
     print("\n".join(format_purchase_details(winner_purchases, valuation_date)))
 
 
