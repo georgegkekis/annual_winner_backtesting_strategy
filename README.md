@@ -6,9 +6,11 @@ previous calendar year. By default, it buys just the top performer.
 Every year's purchases are held until the backtest ends; earlier purchases are
 not sold or reallocated.
 
-The defaults scan the S&P 500, contribute `$1,000` each year, and simulate the
-most recent 30 completed investment years. The index universe and amount of each
-annual contribution can be changed from the command line.
+The defaults scan the S&P 500, contribute `$1,000` each month, and simulate the
+most recent 30 completed investment years. Each year's selected companies are
+based on the previous calendar year's performance and remain fixed for all
+monthly purchases that year. The index, monthly amount, backtest duration, and
+number of companies to buy can be changed from the command line.
 
 ## Important limitation
 
@@ -21,23 +23,24 @@ not a historically constituent-correct S&P 500 backtest.
 
 Prices come from Yahoo Finance via `yfinance`, using adjusted close prices
 (including dividends and splits). The strategy selects the requested number of
-top companies using calendar-year adjusted-close return, splits the annual
-investment equally among them, buys at the first available trading-day close in
-the following year, and values all shares at the last available close of the
-final completed investment year. It assumes fractional shares and excludes fees
-and taxes.
+top companies using calendar-year adjusted-close return, splits each monthly
+investment equally among them, buys at the first available trading-day close of
+each month in the following year, and values all shares at the last available
+close of the final completed investment year. It assumes fractional shares and
+excludes fees and taxes.
 
-The script also invests the same yearly amount in SPY, an S&P 500 ETF, on the
-first available trading day of each year. It prints two lines, one per
+The script also invests the same monthly amount in SPY, an S&P 500 ETF, on the
+first available trading day of each month. It prints two lines, one per
 strategy, showing total invested, ending value, profit/loss, and profit/loss
 percentage, along with the annualized money-weighted return. The annualized
 return uses the actual purchase dates and final valuation date, so it accounts
-for each yearly contribution being invested for a different length of time. It
-also prints a per-purchase list with each selected company, purchase year,
-ending value, profit/loss percentage, and that purchase's CAGR. The list also
-shows each purchase's total return after five and ten years; it uses the first
-available adjusted close on or after each anniversary and shows `N/A` if the
-full period is not yet available.
+for each monthly contribution being invested for a different length of time. It
+also prints a company-by-year list that groups monthly purchases into one
+position per company per year. It shows the combined ending value,
+profit/loss percentage, and CAGR. The list also shows the combined position's
+total return after five and ten years; it uses the first available adjusted
+close on or after each monthly purchase's anniversary and shows `N/A` until all
+monthly purchases in that group have a full period.
 
 ## Run
 
@@ -48,14 +51,14 @@ python -m pip install -r requirements.txt
 python sp500_annual_winner_backtest.py
 ```
 
-For example, to invest `$2,500` per year for 15 years:
+For example, to invest `$2,500` per month for 15 years:
 
 ```bash
 python sp500_annual_winner_backtest.py --amount 2500 --years 15
 ```
 
 Set `--top-performers` to buy more than one previous-year winner. For example,
-to split each annual contribution equally among the top five:
+to split each monthly contribution equally among the top five:
 
 ```bash
 python sp500_annual_winner_backtest.py --top-performers 5

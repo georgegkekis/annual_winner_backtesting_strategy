@@ -176,7 +176,7 @@ def get_cached_adjusted_closes(
 def run_backtest(
     prices: pd.DataFrame,
     years: int,
-    annual_investment: float,
+    monthly_investment: float,
     constituent_symbols: list[str],
     top_performer_count: int = DEFAULT_TOP_PERFORMER_COUNT,
 ) -> pd.DataFrame:
@@ -214,46 +214,49 @@ def run_backtest(
                 f"for selecting the top {top_performer_count} in {winner_year}."
             )
 
-        investment_per_company = annual_investment / top_performer_count
-        for ticker, winner_return in top_performers.items():
-            winner_prices = prices[ticker].dropna()
-            investment_year_prices = winner_prices[
-                winner_prices.index.year == investment_year
-            ]
-            if investment_year_prices.empty:
-                raise RuntimeError(
-                    f"No purchase price available for {ticker} in {investment_year}."
-                )
-            purchase_date = investment_year_prices.index[0]
-            purchase_price = investment_year_prices.iloc[0]
-            ending_price = year_end_prices.loc[completed_year].get(ticker)
-            if pd.isna(purchase_price) or pd.isna(ending_price):
-                raise RuntimeError(
-                    f"Missing purchase or ending price for {ticker} "
-                    f"({investment_year}-{completed_year})."
-                )
+        investment_per_company = monthly_investment / top_performer_count
+        for month in range(1, 13):
+            for ticker, winner_return in top_performers.items():
+                winner_prices = prices[ticker].dropna()
+                month_prices = winner_prices[
+                    (winner_prices.index.year == investment_year)
+                    & (winner_prices.index.month == month)
+                ]
+                if month_prices.empty:
+                    raise RuntimeError(
+                        f"No purchase price available for {ticker} in "
+                        f"{investment_year}-{month:02d}."
+                    )
+                purchase_date = month_prices.index[0]
+                purchase_price = month_prices.iloc[0]
+                ending_price = year_end_prices.loc[completed_year].get(ticker)
+                if pd.isna(purchase_price) or pd.isna(ending_price):
+                    raise RuntimeError(
+                        f"Missing purchase or ending price for {ticker} "
+                        f"({investment_year}-{completed_year})."
+                    )
 
-            shares = investment_per_company / float(purchase_price)
-            purchases.append(
-                {
-                    "investment_year": investment_year,
-                    "winner_of_year": winner_year,
-                    "selected_company": str(ticker),
-                    "winner_year_return_pct": float(winner_return) * 100,
-                    "purchase_date": purchase_date,
-                    "investment": investment_per_company,
-                    "purchase_price": float(purchase_price),
-                    "shares": shares,
-                    "ending_price": float(ending_price),
-                    "ending_value": shares * float(ending_price),
-                    "return_5y_pct": forward_return_pct(
-                        winner_prices, purchase_date, 5, prices.index[-1]
-                    ),
-                    "return_10y_pct": forward_return_pct(
-                        winner_prices, purchase_date, 10, prices.index[-1]
-                    ),
-                }
-            )
+                shares = investment_per_company / float(purchase_price)
+                purchases.append(
+                    {
+                        "investment_year": investment_year,
+                        "winner_of_year": winner_year,
+                        "selected_company": str(ticker),
+                        "winner_year_return_pct": float(winner_return) * 100,
+                        "purchase_date": purchase_date,
+                        "investment": investment_per_company,
+                        "purchase_price": float(purchase_price),
+                        "shares": shares,
+                        "ending_price": float(ending_price),
+                        "ending_value": shares * float(ending_price),
+                        "return_5y_pct": forward_return_pct(
+                            winner_prices, purchase_date, 5, prices.index[-1]
+                        ),
+                        "return_10y_pct": forward_return_pct(
+                            winner_prices, purchase_date, 10, prices.index[-1]
+                        ),
+                    }
+                )
 
     return pd.DataFrame(purchases)
 
@@ -277,7 +280,7 @@ def forward_return_pct(
 
 
 def run_sp500_benchmark(
-    prices: pd.DataFrame, years: int, annual_investment: float
+    prices: pd.DataFrame, years: int, monthly_investment: float
 ) -> pd.DataFrame:
     if SP500_BENCHMARK_TICKER not in prices.columns:
         raise RuntimeError(
@@ -297,27 +300,29 @@ def run_sp500_benchmark(
     purchases = []
 
     for investment_year in range(first_investment_year, completed_year + 1):
-        year_prices = benchmark_prices[
-            benchmark_prices.index.year == investment_year
-        ]
-        if year_prices.empty:
-            raise RuntimeError(
-                f"No {SP500_BENCHMARK_TICKER} price data available in "
-                f"{investment_year}."
+        for month in range(1, 13):
+            month_prices = benchmark_prices[
+                (benchmark_prices.index.year == investment_year)
+                & (benchmark_prices.index.month == month)
+            ]
+            if month_prices.empty:
+                raise RuntimeError(
+                    f"No {SP500_BENCHMARK_TICKER} price data available in "
+                    f"{investment_year}-{month:02d}."
+                )
+            purchase_price = float(month_prices.iloc[0])
+            shares = monthly_investment / purchase_price
+            purchases.append(
+                {
+                    "investment_year": investment_year,
+                    "purchase_date": month_prices.index[0],
+                    "investment": monthly_investment,
+                    "purchase_price": purchase_price,
+                    "shares": shares,
+                    "ending_price": ending_price,
+                    "ending_value": shares * ending_price,
+                }
             )
-        purchase_price = float(year_prices.iloc[0])
-        shares = annual_investment / purchase_price
-        purchases.append(
-            {
-                "investment_year": investment_year,
-                "purchase_date": year_prices.index[0],
-                "investment": annual_investment,
-                "purchase_price": purchase_price,
-                "shares": shares,
-                "ending_price": ending_price,
-                "ending_value": shares * ending_price,
-            }
-        )
 
     return pd.DataFrame(purchases)
 
@@ -378,42 +383,44 @@ def format_purchase_details(
     purchases: pd.DataFrame, valuation_date: pd.Timestamp
 ) -> list[str]:
     lines = [
-        f"{'Company':<12} | {'Bought':>6} | {'Years Held':>10} | "
+        f"{'Company':<12} | {'Year':>6} | {'Years Held':>10} | "
         f"{'Ending Value':>14} | {'Profit/Loss %':>13} | "
         f"{'CAGR':>9} | {'Next 5Y %':>10} | {'Next 10Y %':>11}"
     ]
-    for purchase in purchases.itertuples(index=False):
-        investment = float(purchase.investment)
-        ending_value = float(purchase.ending_value)
+    grouped_purchases = purchases.groupby(
+        ["investment_year", "selected_company"], sort=False
+    )
+    for (investment_year, company), company_purchases in grouped_purchases:
+        investment = float(company_purchases["investment"].sum())
+        ending_value = float(company_purchases["ending_value"].sum())
         profit_loss_pct = (ending_value - investment) / investment * 100
-        holding_days = (valuation_date - pd.Timestamp(purchase.purchase_date)).days
+        first_purchase_date = pd.Timestamp(company_purchases["purchase_date"].min())
+        holding_days = (valuation_date - first_purchase_date).days
         if holding_days <= 0:
             raise ValueError("Valuation date must be after each purchase date.")
         holding_years = holding_days / 365
-        cagr_pct = (
-            -100.0
-            if ending_value == 0
-            else ((ending_value / investment) ** (1 / holding_years) - 1) * 100
-        )
-        return_5y = (
-            "N/A"
-            if pd.isna(purchase.return_5y_pct)
-            else f"{purchase.return_5y_pct:+.2f}%"
-        )
-        return_10y = (
-            "N/A"
-            if pd.isna(purchase.return_10y_pct)
-            else f"{purchase.return_10y_pct:+.2f}%"
-        )
+        cagr_pct = annualized_return(company_purchases, valuation_date)
+
+        forward_returns = []
+        for column in ("return_5y_pct", "return_10y_pct"):
+            returns = company_purchases[column]
+            if returns.isna().any():
+                forward_returns.append("N/A")
+            else:
+                weighted_return = float(
+                    (returns * company_purchases["investment"]).sum() / investment
+                )
+                forward_returns.append(f"{weighted_return:+.2f}%")
+
         lines.append(
-            f"{purchase.selected_company:<12} | "
-            f"{purchase.investment_year:>6} | "
+            f"{company:<12} | "
+            f"{investment_year:>6} | "
             f"{int(holding_years):>10} | "
             f"${ending_value:>13,.2f} | "
             f"{profit_loss_pct:>+12.2f}% | "
             f"{cagr_pct:>+8.2f}% | "
-            f"{return_5y:>10} | "
-            f"{return_10y:>11}"
+            f"{forward_returns[0]:>10} | "
+            f"{forward_returns[1]:>11}"
         )
     return lines
 
@@ -421,9 +428,8 @@ def format_purchase_details(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Split each annual investment equally across the top index members "
-            "by prior-calendar-year return, then hold every purchase through "
-            "the end of the backtest."
+            "Invest monthly in the top index members by previous-calendar-year "
+            "return, holding each purchase through the end of the backtest."
         )
     )
     parser.add_argument(
@@ -436,7 +442,7 @@ def parse_args() -> argparse.Namespace:
         "--amount",
         type=float,
         default=1000,
-        help="Amount contributed at the start of each year (default: 1000).",
+        help="Amount contributed each month (default: 1000).",
     )
     parser.add_argument(
         "--years",
@@ -449,7 +455,7 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_TOP_PERFORMER_COUNT,
         help=(
-            "Number of previous-year top performers to buy each year "
+            "Number of previous-year top performers to buy each month "
             f"(default: {DEFAULT_TOP_PERFORMER_COUNT})."
         ),
     )
@@ -491,7 +497,7 @@ def main() -> None:
     benchmark_purchases = run_sp500_benchmark(prices, args.years, args.amount)
     sp500_value = float(benchmark_purchases["ending_value"].sum())
     valuation_date = prices.index[prices.index.year == completed_year][-1]
-    total_invested = args.years * args.amount
+    total_invested = args.years * 12 * args.amount
 
     print(
         f"{'Strategy':<22} | {'Invested':>15} | {'Ending':>15} | "
@@ -514,7 +520,7 @@ def main() -> None:
             annualized_return(winner_purchases, valuation_date),
         )
     )
-    print(f"\nAnnual top-{args.top_performers} purchases:")
+    print(f"\nMonthly purchases in each year's top {args.top_performers}:")
     print("\n".join(format_purchase_details(winner_purchases, valuation_date)))
 
 
