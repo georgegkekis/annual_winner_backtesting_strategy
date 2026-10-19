@@ -334,6 +334,40 @@ def format_portfolio_summary(
     )
 
 
+def format_purchase_details(
+    purchases: pd.DataFrame, valuation_date: pd.Timestamp
+) -> list[str]:
+    lines = [
+        f"{'Company':<12} | {'Bought':>6} | {'Years Held':>10} | "
+        f"{'Ending Value':>14} | "
+        f"{'Profit/Loss':>14} | {'Profit/Loss %':>13} | {'CAGR':>9}"
+    ]
+    for purchase in purchases.itertuples(index=False):
+        investment = float(purchase.investment)
+        ending_value = float(purchase.ending_value)
+        profit_loss = ending_value - investment
+        profit_loss_pct = profit_loss / investment * 100
+        holding_days = (valuation_date - pd.Timestamp(purchase.purchase_date)).days
+        if holding_days <= 0:
+            raise ValueError("Valuation date must be after each purchase date.")
+        holding_years = holding_days / 365
+        cagr_pct = (
+            -100.0
+            if ending_value == 0
+            else ((ending_value / investment) ** (1 / holding_years) - 1) * 100
+        )
+        lines.append(
+            f"{purchase.selected_company:<12} | "
+            f"{purchase.investment_year:>6} | "
+            f"{int(holding_years):>10} | "
+            f"${ending_value:>13,.2f} | "
+            f"${profit_loss:>+13,.2f} | "
+            f"{profit_loss_pct:>+12.2f}% | "
+            f"{cagr_pct:>+8.2f}%"
+        )
+    return lines
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -415,6 +449,8 @@ def main() -> None:
             annualized_return(winner_purchases, valuation_date),
         )
     )
+    print("\nAnnual winner purchases:")
+    print("\n".join(format_purchase_details(winner_purchases, valuation_date)))
 
 
 if __name__ == "__main__":

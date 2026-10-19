@@ -30,7 +30,9 @@ first available trading day of each year. It prints two lines, one per
 strategy, showing total invested, ending value, profit/loss, and profit/loss
 percentage, along with the annualized money-weighted return. The annualized
 return uses the actual purchase dates and final valuation date, so it accounts
-for each yearly contribution being invested for a different length of time.
+for each yearly contribution being invested for a different length of time. It
+also prints a per-purchase list with the selected company, purchase year,
+ending value, profit/loss, profit/loss percentage, and that purchase's CAGR.
 
 ## Run
 
