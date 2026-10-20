@@ -341,24 +341,6 @@ def select_top_performers(
     return top_performers
 
 
-def forward_return_pct(
-    prices: pd.Series,
-    purchase_date: pd.Timestamp,
-    years: int,
-    valuation_date: pd.Timestamp,
-) -> float | None:
-    target_date = pd.Timestamp(purchase_date) + pd.DateOffset(years=years)
-    if target_date > valuation_date:
-        return None
-    target_prices = prices.loc[target_date:valuation_date].dropna()
-    if target_prices.empty:
-        return None
-    purchase_price = prices.asof(purchase_date)
-    if pd.isna(purchase_price):
-        return None
-    return (float(target_prices.iloc[0]) / float(purchase_price) - 1) * 100
-
-
 def run_benchmark(
     prices: pd.DataFrame,
     years: int,
@@ -496,7 +478,7 @@ def format_purchase_details(
     lines = [
         f"{'Company':<12} | {'Year':>6} | {'Years Held':>10} | "
         f"{'Ending Value':>14} | {'Profit/Loss %':>13} | "
-        f"{'CAGR':>9} | {'Next 5Y %':>10} | {'Next 10Y %':>11}"
+        f"{'CAGR':>9}"
     ]
     grouped_purchases = purchases.groupby(
         ["investment_year", "selected_company"], sort=False
@@ -512,26 +494,13 @@ def format_purchase_details(
         holding_years = holding_days / 365
         cagr_pct = annualized_return(company_purchases, valuation_date)
 
-        forward_returns = []
-        for column in ("return_5y_pct", "return_10y_pct"):
-            returns = company_purchases[column]
-            if returns.isna().any():
-                forward_returns.append("N/A")
-            else:
-                weighted_return = float(
-                    (returns * company_purchases["investment"]).sum() / investment
-                )
-                forward_returns.append(f"{weighted_return:+.2f}%")
-
         lines.append(
             f"{company:<12} | "
             f"{investment_year:>6} | "
             f"{int(holding_years):>10} | "
             f"${ending_value:>13,.2f} | "
             f"{profit_loss_pct:>+12.2f}% | "
-            f"{cagr_pct:>+8.2f}% | "
-            f"{forward_returns[0]:>10} | "
-            f"{forward_returns[1]:>11}"
+            f"{cagr_pct:>+8.2f}%"
         )
     return lines
 

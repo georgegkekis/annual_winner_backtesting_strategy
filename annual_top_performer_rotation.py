@@ -18,7 +18,6 @@ from backtest_common import (
     format_portfolio_header,
     format_portfolio_summary,
     format_purchase_details,
-    forward_return_pct,
     get_backtest_window,
     get_cached_adjusted_closes,
     get_cached_constituents,
@@ -317,12 +316,6 @@ def run_backtest(
                             else 0.0
                         ),
                         "ending_value": 0.0,
-                        "return_5y_pct": forward_return_pct(
-                            winner_prices, purchase_date, 5, prices.index[-1]
-                        ),
-                        "return_10y_pct": forward_return_pct(
-                            winner_prices, purchase_date, 10, prices.index[-1]
-                        ),
                         "positions": {ticker: shares},
                     }
                 )

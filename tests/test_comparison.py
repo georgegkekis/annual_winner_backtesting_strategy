@@ -1,5 +1,9 @@
 from datetime import date
+from contextlib import redirect_stdout
+from io import StringIO
+from argparse import Namespace
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -249,6 +253,63 @@ class ComparisonTests(unittest.TestCase):
 
         self.assertTrue(line.endswith("$       -250.00 |   -25.00% |   -10.00%"))
 
+    def test_main_prints_portfolio_summary_after_purchase_details(self):
+        completed_year = date.today().year - 1
+        prices = pd.DataFrame(
+            {"SPY": [100.0]},
+            index=pd.to_datetime([f"{completed_year}-12-31"]),
+        )
+        winner_purchases = pd.DataFrame(
+            {"ending_value": [1500.0], "investment": [1000.0]}
+        )
+        benchmark_purchases = pd.DataFrame(
+            {"ending_value": [1200.0], "investment": [1000.0]}
+        )
+        output = StringIO()
+
+        with (
+            patch.object(
+                backtest,
+                "parse_args",
+                return_value=Namespace(
+                    years=1,
+                    amount=1000,
+                    index="sp500",
+                    top_performers=1,
+                ),
+            ),
+            patch.object(
+                backtest,
+                "get_backtest_window",
+                return_value=(
+                    completed_year,
+                    completed_year,
+                    date(completed_year - 2, 1, 1),
+                    date(completed_year + 1, 1, 1),
+                    "2026-10",
+                ),
+            ),
+            patch.object(backtest, "get_cached_constituents", return_value=["AAA"]),
+            patch.object(backtest, "get_cached_adjusted_closes", return_value=prices),
+            patch.object(backtest, "run_backtest", return_value=winner_purchases),
+            patch.object(
+                backtest, "run_benchmark", return_value=benchmark_purchases
+            ),
+            patch.object(
+                backtest, "format_purchase_details", return_value=["Purchase detail"]
+            ),
+            patch.object(backtest, "annualized_return", return_value=5.0),
+            redirect_stdout(output),
+        ):
+            backtest.main()
+
+        lines = output.getvalue().splitlines()
+        summary_header_index = next(
+            index for index, line in enumerate(lines) if line.startswith("Strategy")
+        )
+        self.assertLess(lines.index("Purchase detail"), summary_header_index)
+        self.assertEqual(lines[-1].split("|")[0].strip(), "Previous-year winners")
+
     def test_purchase_details_group_monthly_purchases_by_company_and_year(self):
         purchases = pd.DataFrame(
             {
@@ -257,8 +318,6 @@ class ComparisonTests(unittest.TestCase):
                 "purchase_date": pd.to_datetime(["2025-01-01", "2025-02-03"]),
                 "investment": [500.0, 500.0],
                 "ending_value": [600.0, 610.0],
-                "return_5y_pct": [None, None],
-                "return_10y_pct": [None, None],
             }
         )
 
@@ -273,32 +332,9 @@ class ComparisonTests(unittest.TestCase):
         self.assertIn("2025", lines[1])
         self.assertIn("$     1,210.00", lines[1])
         self.assertIn("+21.00%", lines[1])
-        self.assertIn("+10.24%", lines[1])
-        self.assertTrue(lines[1].endswith("N/A |         N/A"))
-
-    def test_forward_returns_use_first_available_price_on_or_after_anniversary(self):
-        prices = pd.Series(
-            [100.0, 120.0, 150.0],
-            index=pd.to_datetime(["2020-01-02", "2025-01-03", "2030-01-03"]),
-        )
-
-        result = backtest.forward_return_pct(
-            prices, pd.Timestamp("2020-01-02"), 5, pd.Timestamp("2030-01-03")
-        )
-
-        self.assertAlmostEqual(result, 20.0)
-
-    def test_forward_return_is_unavailable_before_full_period(self):
-        prices = pd.Series(
-            [100.0, 120.0],
-            index=pd.to_datetime(["2020-01-02", "2024-12-31"]),
-        )
-
-        result = backtest.forward_return_pct(
-            prices, pd.Timestamp("2020-01-02"), 5, pd.Timestamp("2024-12-31")
-        )
-
-        self.assertIsNone(result)
+        self.assertNotIn("Next 5Y", lines[0])
+        self.assertNotIn("Next 10Y", lines[0])
+        self.assertEqual(len(lines[1].split("|")), 6)
 
 
 if __name__ == "__main__":

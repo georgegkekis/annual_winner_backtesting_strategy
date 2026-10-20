@@ -40,10 +40,7 @@ return uses the actual purchase dates and final valuation date, so it accounts
 for each monthly contribution being invested for a different length of time. It
 also prints a company-by-year list that groups monthly purchases into one
 position per company per year. It shows the combined ending value,
-profit/loss percentage, and CAGR. The list also shows the combined position's
-total return after five and ten years; it uses the first available adjusted
-close on or after each monthly purchase's anniversary and shows `N/A` until all
-monthly purchases in that group have a full period.
+profit/loss percentage, and CAGR.
 
 ## Run
 

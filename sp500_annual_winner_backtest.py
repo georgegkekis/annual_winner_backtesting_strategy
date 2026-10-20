@@ -20,7 +20,6 @@ from backtest_common import (
     format_portfolio_header,
     format_portfolio_summary,
     format_purchase_details,
-    forward_return_pct,
     get_backtest_window,
     get_cached_adjusted_closes,
     get_cached_constituents,
@@ -99,12 +98,6 @@ def run_backtest(
                         "shares": shares,
                         "ending_price": float(ending_price),
                         "ending_value": shares * float(ending_price),
-                        "return_5y_pct": forward_return_pct(
-                            winner_prices, purchase_date, 5, prices.index[-1]
-                        ),
-                        "return_10y_pct": forward_return_pct(
-                            winner_prices, purchase_date, 10, prices.index[-1]
-                        ),
                     }
                 )
 
@@ -161,6 +154,9 @@ def main() -> None:
     valuation_date = prices.index[prices.index.year == completed_year][-1]
     total_invested = args.years * 12 * args.amount
 
+    print(f"\nMonthly purchases in each year's top {args.top_performers}:")
+    print("\n".join(format_purchase_details(winner_purchases, valuation_date)))
+    print()
     print(format_portfolio_header())
     print(
         format_portfolio_summary(
@@ -178,8 +174,6 @@ def main() -> None:
             annualized_return(winner_purchases, valuation_date),
         )
     )
-    print(f"\nMonthly purchases in each year's top {args.top_performers}:")
-    print("\n".join(format_purchase_details(winner_purchases, valuation_date)))
 
 
 if __name__ == "__main__":
