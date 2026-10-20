@@ -3,10 +3,39 @@ import unittest
 
 import pandas as pd
 
+from backtest_common import get_backtest_window, get_year_end_prices, run_benchmark
 import sp500_annual_winner_backtest as backtest
 
 
 class ComparisonTests(unittest.TestCase):
+    def test_backtest_window_preserves_default_historical_range(self):
+        window = get_backtest_window(30, date(2026, 10, 19))
+
+        self.assertEqual(
+            window,
+            (
+                2025,
+                1996,
+                date(1994, 1, 1),
+                date(2026, 1, 1),
+                "2026-10",
+            ),
+        )
+
+    def test_year_end_prices_do_not_carry_stale_quotes_forward(self):
+        prices = pd.DataFrame(
+            {
+                "STALE": [10.0, float("nan")],
+                "ACTIVE": [20.0, 22.0],
+            },
+            index=pd.to_datetime(["2024-01-02", "2024-12-31"]),
+        )
+
+        year_end_prices = get_year_end_prices(prices)
+
+        self.assertTrue(pd.isna(year_end_prices.loc[2024, "STALE"]))
+        self.assertEqual(year_end_prices.loc[2024, "ACTIVE"], 22.0)
+
     def setUp(self):
         completed_year = date.today().year - 1
         investment_dates = [
@@ -27,6 +56,7 @@ class ComparisonTests(unittest.TestCase):
                 "EEE": [10.0, 10.2, *[10.5 + month / 10 for month in range(1, 13)], 16.0],
                 "FFF": [10.0, 10.1, *[10.2 + month / 10 for month in range(1, 13)], 14.0],
                 "SPY": [100.0, 110.0, *[100 + month for month in range(1, 13)], 200.0],
+                "^RUT": [100.0, 105.0, *[100 + month for month in range(1, 13)], 150.0],
             },
             index=pd.DatetimeIndex(dates),
         )
@@ -78,6 +108,28 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(ccc_purchase["purchase_date"], second_day)
         self.assertEqual(ccc_purchase["investment"], 200)
 
+    def test_monthly_purchase_defers_until_a_winners_next_available_quote(self):
+        prices = self.prices.copy()
+        completed_year = date.today().year - 1
+        prices.loc[pd.Timestamp(completed_year, 7, 3), "CCC"] = float("nan")
+
+        purchases = backtest.run_backtest(
+            prices,
+            1,
+            1000,
+            constituent_symbols=["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"],
+            top_performer_count=5,
+        )
+        ccc_purchases = purchases[
+            purchases["selected_company"] == "CCC"
+        ]
+        august_purchases = ccc_purchases[
+            pd.to_datetime(ccc_purchases["purchase_date"]).dt.month == 8
+        ]
+
+        self.assertEqual(len(ccc_purchases), 12)
+        self.assertEqual(len(august_purchases), 2)
+
     def test_default_selects_and_allocates_to_one_performer(self):
         purchases = backtest.run_backtest(
             self.prices,
@@ -90,11 +142,83 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(len(purchases), 12)
         self.assertEqual(purchases["investment"].tolist(), [1000] * 12)
 
+    def test_selection_handles_object_typed_prices_and_missing_history(self):
+        prices = pd.DataFrame(
+            {
+                "AAA": [10.0, 15.0],
+                "MISSING": [float("nan"), 20.0],
+                "ZERO": [0.0, 1.0],
+            },
+            index=[2023, 2024],
+            dtype=object,
+        )
+
+        selected = backtest.select_top_performers(
+            prices, 2024, ["AAA", "MISSING", "ZERO"], 1
+        )
+
+        self.assertEqual(selected.index.tolist(), ["AAA"])
+        self.assertEqual(selected.iloc[0], 0.5)
+
     def test_sp500_benchmark_uses_same_annual_contribution(self):
         purchases = backtest.run_sp500_benchmark(self.prices, 1, 1000)
 
         self.assertEqual(purchases["investment"].sum(), 12000)
         self.assertEqual(len(purchases), 12)
+
+    def test_russell_benchmark_uses_russell_index_history(self):
+        purchases = run_benchmark(
+            self.prices,
+            1,
+            1000,
+            "^RUT",
+            date.today().year - 1,
+        )
+
+        self.assertEqual(purchases["investment"].sum(), 12000)
+        self.assertEqual(purchases.iloc[0]["ending_price"], 150.0)
+
+    def test_benchmark_skips_only_months_before_history_begins(self):
+        dates = pd.to_datetime(
+            ["2025-06-02", "2025-07-01", "2025-08-01", "2025-09-01",
+             "2025-10-01", "2025-11-03", "2025-12-01"]
+        )
+        prices = pd.DataFrame(
+            {"GD.AT": [100.0, 105.0, 110.0, 115.0, 120.0, 125.0, 130.0]},
+            index=dates,
+        )
+
+        purchases = run_benchmark(
+            prices,
+            1,
+            1000,
+            "GD.AT",
+            2025,
+        )
+
+        self.assertEqual(len(purchases), 7)
+        self.assertEqual(purchases["investment"].sum(), 7000)
+        self.assertEqual(purchases.iloc[0]["purchase_date"], pd.Timestamp("2025-06-02"))
+
+    def test_benchmark_defers_contribution_when_month_has_no_quotes(self):
+        prices = self.prices.copy()
+        completed_year = date.today().year - 1
+        prices.loc[pd.Timestamp(completed_year, 7, 3), "^RUT"] = float("nan")
+
+        purchases = run_benchmark(
+            prices,
+            1,
+            1000,
+            "^RUT",
+            completed_year,
+        )
+
+        august_purchases = purchases[
+            pd.to_datetime(purchases["purchase_date"]).dt.month == 8
+        ]
+        self.assertEqual(len(purchases), 12)
+        self.assertEqual(purchases["investment"].sum(), 12000)
+        self.assertEqual(len(august_purchases), 2)
 
     def test_annualized_return_accounts_for_purchase_dates(self):
         purchases = pd.DataFrame(
